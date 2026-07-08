@@ -117,7 +117,7 @@
   .modal-bg.show{display:flex;}
   .modal{background:var(--surface);border-radius:18px 18px 0 0;width:100%;max-width:520px;
     margin:0 auto;padding:20px;max-height:85vh;overflow-y:auto;}
-  .modal img{width:100%;border-radius:10px;margin-bottom:12px;}
+  .modal img{width:100%;max-height:220px;object-fit:cover;border-radius:10px;margin-bottom:12px;}
   .modal h3{margin:0 0 4px;font-size:17px;}
   .close-row{display:flex;justify-content:flex-end;}
   .close-row button{background:none;border:none;color:var(--text-2);font-size:14px;font-weight:600;padding:6px;}
@@ -198,7 +198,7 @@
       <button class="btn btn-primary" id="exportBtn">Export to Excel</button>
       <button class="btn btn-secondary" id="exportAllBtn">Export everything</button>
       <div class="export-summary" style="margin-top:14px;">
-        Thumbnails are embedded small (60×60) to keep the file light. Each row also has a "Full Photo" link to the original.
+        Thumbnails are embedded at 200×200 so the photo is actually legible. Each row also has a "Full Photo" link to the original.
       </div>
     </div>
   </section>
@@ -242,7 +242,7 @@ const PHOTO_BUCKET = 'action-photos';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const APP_VERSION = 'v1.1 · 2026-07-08';
+const APP_VERSION = 'v1.3 · 2026-07-08';
 document.getElementById('versionPill').textContent = APP_VERSION;
 
 // Known SLOCs (from field survey data). Edit/add as needed.
@@ -688,7 +688,7 @@ async function exportToExcel(list){
     { header:'Size Estimate', key:'size_estimate', width:16 },
     { header:'Priority', key:'priority', width:10 },
     { header:'Status', key:'status', width:12 },
-    { header:'Thumbnail', key:'thumb', width:10 },
+    { header:'Thumbnail', key:'thumb', width:28 },
     { header:'Full Photo', key:'full', width:16 },
     { header:'Latitude', key:'lat', width:12 },
     { header:'Longitude', key:'lng', width:12 },
@@ -714,16 +714,16 @@ async function exportToExcel(list){
       map: '',
       created: new Date(it.created_at).toLocaleString(),
     });
-    ws.getRow(rowIdx).height = 46;
+    ws.getRow(rowIdx).height = 150;
 
     const src = it.photo_local || it.photo_url;
     if (src){
-      const base64 = await loadImageAsBase64Thumb(src, 60);
+      const base64 = await loadImageAsBase64Thumb(src, 200);
       if (base64){
         const imgId = wb.addImage({ base64, extension:'jpeg' });
         ws.addImage(imgId, {
           tl: { col:6, row: rowIdx-1 },
-          ext: { width:56, height:56 },
+          ext: { width:196, height:196 },
         });
       }
       const linkCell = ws.getCell(`H${rowIdx}`);
