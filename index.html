@@ -136,6 +136,10 @@
   <div class="badge-row">
     <div class="pill"><span class="dot" id="netDot"></span><span id="netLabel">Checking…</span></div>
     <div class="pill"><span id="queueLabel">0 queued</span></div>
+    <div class="pill" id="userPill" style="cursor:pointer;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span id="userLabel">Set name</span>
+    </div>
     <div class="pill" id="versionPill"></div>
   </div>
 </header>
@@ -226,6 +230,16 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="modal-bg" id="nameModalBg">
+  <div class="modal" id="nameModalContent">
+    <h3 style="margin-top:0;">Who's logging?</h3>
+    <p style="color:var(--text-2);font-size:13.5px;margin:4px 0 12px;">Your name is attached to items you log or edit, so the team knows who did what.</p>
+    <label for="nameInput">Your name</label>
+    <input type="text" id="nameInput" placeholder="e.g. Ahmad Rahman">
+    <button class="btn btn-primary" id="saveNameBtn">Save</button>
+  </div>
+</div>
+
 <!-- ExcelJS for xlsx export with embedded images -->
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 
@@ -271,12 +285,14 @@ const SLOCS = [
 ];
 
 const LS_KEY = 'asb_action_items_v1';
+const USER_KEY = 'asb_user_name';
 
 /* ---------- state ---------- */
 let items = loadLocal();          // full working set, keyed by id
 let currentPriority = 'Medium';
 let currentPhoto = null;          // {dataUrl, blob}
 let syncing = false;
+let currentUser = localStorage.getItem(USER_KEY) || '';
 
 /* ---------- helpers ---------- */
 function loadLocal(){
@@ -304,6 +320,34 @@ function getCurrentPosition(){
     );
   });
 }
+
+/* ---------- who's logging (name tag) ---------- */
+function updateUserPill(){
+  document.getElementById('userLabel').textContent = currentUser || 'Set name';
+}
+function openNameModal(){
+  document.getElementById('nameInput').value = currentUser;
+  document.getElementById('nameModalBg').classList.add('show');
+  setTimeout(()=>document.getElementById('nameInput').focus(), 50);
+}
+function closeNameModal(){
+  document.getElementById('nameModalBg').classList.remove('show');
+}
+document.getElementById('userPill').addEventListener('click', openNameModal);
+document.getElementById('saveNameBtn').addEventListener('click', ()=>{
+  const val = document.getElementById('nameInput').value.trim();
+  if (!val){ showToast('Enter a name'); return; }
+  currentUser = val;
+  localStorage.setItem(USER_KEY, currentUser);
+  updateUserPill();
+  closeNameModal();
+});
+document.getElementById('nameModalBg').addEventListener('click', e=>{
+  // only allow dismiss-by-backdrop once a name has already been set
+  if (e.target.id === 'nameModalBg' && currentUser) closeNameModal();
+});
+updateUserPill();
+if (!currentUser) openNameModal();
 
 /* ---------- populate SLOC dropdowns ---------- */
 function fillSlocSelects(){
@@ -385,6 +429,8 @@ document.getElementById('saveBtn').addEventListener('click', async ()=>{
     lat: loc?.lat ?? null,
     lng: loc?.lng ?? null,
     location_accuracy_m: loc?.location_accuracy_m ?? null,
+    logged_by: currentUser || 'Unknown',
+    updated_by: null,
     sync: 'queued',
     created_at: new Date().toISOString(),
   };
@@ -444,6 +490,8 @@ async function trySync(){
         lat: it.lat ?? null,
         lng: it.lng ?? null,
         location_accuracy_m: it.location_accuracy_m ?? null,
+        logged_by: it.logged_by ?? null,
+        updated_by: it.updated_by ?? null,
       };
 
       if (it.sync === 'queued'){
@@ -537,6 +585,8 @@ function renderList(){
             <span>${it.size_estimate || '—'}</span>
             <span>·</span>
             <span>${it.status}</span>
+            <span>·</span>
+            <span>${escapeHtml(it.logged_by || 'Unknown')}</span>
             <span class="sync-tag"><span class="dot ${syncDot}"></span>${syncText}</span>
             ${it.lat!=null ? '<span class="sync-tag">· <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>' : ''}
           </div>
@@ -574,6 +624,9 @@ function openDetail(id){
     <h3>${it.sloc_code} — ${it.sloc_desc}</h3>
     <p style="color:var(--text-2);font-size:14px;">${escapeHtml(it.description)}</p>
     ${mapLink}
+    <div style="font-size:12.5px;color:var(--text-2);margin-top:8px;">
+      Logged by ${escapeHtml(it.logged_by || 'Unknown')}${it.updated_by ? ` · last edited by ${escapeHtml(it.updated_by)}` : ''}
+    </div>
     <label>Size estimate</label>
     <input type="text" id="editSize" value="${it.size_estimate||''}">
     <label>Status</label>
@@ -597,6 +650,7 @@ function openDetail(id){
     it.size_estimate = document.getElementById('editSize').value.trim();
     it.status = document.getElementById('editStatus').value;
     it.priority = document.getElementById('editPriority').value;
+    it.updated_by = currentUser || 'Unknown';
     it.sync = it.sync === 'synced' ? 'dirty' : it.sync; // re-flag for sync if already pushed
     saveLocal();
     closeModal();
@@ -694,6 +748,8 @@ async function exportToExcel(list){
     { header:'Longitude', key:'lng', width:12 },
     { header:'Map Link', key:'map', width:16 },
     { header:'Created', key:'created', width:18 },
+    { header:'Logged By', key:'logged_by', width:16 },
+    { header:'Updated By', key:'updated_by', width:16 },
   ];
   ws.getRow(1).font = { bold:true };
 
@@ -713,6 +769,8 @@ async function exportToExcel(list){
       lng: it.lng ?? '',
       map: '',
       created: new Date(it.created_at).toLocaleString(),
+      logged_by: it.logged_by || '',
+      updated_by: it.updated_by || '',
     });
     ws.getRow(rowIdx).height = 150;
 
@@ -782,6 +840,8 @@ async function pullRemote(){
         lat: row.lat,
         lng: row.lng,
         location_accuracy_m: row.location_accuracy_m,
+        logged_by: row.logged_by,
+        updated_by: row.updated_by,
         sync: 'synced',
         created_at: row.created_at,
       });
