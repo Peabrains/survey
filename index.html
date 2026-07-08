@@ -532,7 +532,7 @@ function updateNetBadge(){
     label.textContent = 'Offline';
   }
 }
-window.addEventListener('online', ()=>{ updateNetBadge(); trySync(); });
+window.addEventListener('online', ()=>{ updateNetBadge(); trySync(); pullRemote(); });
 window.addEventListener('offline', updateNetBadge);
 updateNetBadge();
 
@@ -812,47 +812,93 @@ async function exportToExcel(list){
   showToast('Exported');
 }
 
-/* ---------- initial fetch of anything already on Supabase (e.g. from another device) ---------- */
+/* ---------- keep in sync with what other devices/users are logging ----------
+   Runs on load and on an interval. Pulls the full remote set, then:
+   - adds rows we don't have locally yet (new items from other users)
+   - refreshes local items that are already fully synced (their fields may
+     have been edited by someone else) — but never touches items with local
+     edits still queued/dirty, so we don't clobber work in progress
+   - drops local items that were synced but no longer exist remotely
+     (deleted by another user, now that deletes are allowed)
+   ---------------------------------------------------------------------- */
 async function pullRemote(){
   if (!navigator.onLine) return;
   try {
     const { data, error } = await supabase.from('action_items').select('*').order('created_at', { ascending:false });
     if (error) throw error;
+
+    const remoteIds = new Set(data.map(r => r.id));
+    let changed = false;
+
+    // drop local items that were fully synced but have since been deleted remotely
+    const beforeCount = items.length;
+    items = items.filter(it => !(it.sync === 'synced' && it.db_id && !remoteIds.has(it.db_id)));
+    if (items.length !== beforeCount) changed = true;
+
     for (const row of data){
-      if (items.some(i => i.db_id === row.id)) continue; // already have it locally
       let photoUrl = null;
       if (row.photo_path){
         const { data: pub } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(row.photo_path);
         photoUrl = pub.publicUrl;
       }
-      items.push({
-        id: uid(),
-        db_id: row.id,
-        sloc_code: row.sloc_code,
-        sloc_desc: row.sloc_desc,
-        description: row.description,
-        size_estimate: row.size_estimate,
-        priority: row.priority,
-        status: row.status,
-        photo_local: null,
-        photo_path: row.photo_path,
-        photo_url: photoUrl,
-        lat: row.lat,
-        lng: row.lng,
-        location_accuracy_m: row.location_accuracy_m,
-        logged_by: row.logged_by,
-        updated_by: row.updated_by,
-        sync: 'synced',
-        created_at: row.created_at,
-      });
+
+      const existing = items.find(i => i.db_id === row.id);
+      if (!existing){
+        items.push({
+          id: uid(),
+          db_id: row.id,
+          sloc_code: row.sloc_code,
+          sloc_desc: row.sloc_desc,
+          description: row.description,
+          size_estimate: row.size_estimate,
+          priority: row.priority,
+          status: row.status,
+          photo_local: null,
+          photo_path: row.photo_path,
+          photo_url: photoUrl,
+          lat: row.lat,
+          lng: row.lng,
+          location_accuracy_m: row.location_accuracy_m,
+          logged_by: row.logged_by,
+          updated_by: row.updated_by,
+          sync: 'synced',
+          created_at: row.created_at,
+        });
+        changed = true;
+      } else if (existing.sync === 'synced'){
+        // safe to refresh — no unsynced local edits pending on this item
+        Object.assign(existing, {
+          sloc_code: row.sloc_code,
+          sloc_desc: row.sloc_desc,
+          description: row.description,
+          size_estimate: row.size_estimate,
+          priority: row.priority,
+          status: row.status,
+          photo_path: row.photo_path,
+          photo_url: photoUrl,
+          lat: row.lat,
+          lng: row.lng,
+          location_accuracy_m: row.location_accuracy_m,
+          logged_by: row.logged_by,
+          updated_by: row.updated_by,
+        });
+        changed = true;
+      }
+      // if existing.sync is 'queued' or 'dirty', leave it alone — its own
+      // edits will push up on the next trySync pass instead of being overwritten
     }
-    saveLocal();
-    updateQueueBadge();
+
+    if (changed){
+      saveLocal();
+      updateQueueBadge();
+      if (document.getElementById('screen-list').classList.contains('active')) renderList();
+    }
   } catch(err){
     console.warn('pullRemote failed', err.message);
   }
 }
 pullRemote();
+setInterval(pullRemote, 20000); // poll for other users' changes every 20s
 
 </script>
 </body>
