@@ -71,6 +71,10 @@
   .btn-primary{background:var(--accent);color:#fff;}
   .btn-primary:active{background:var(--accent-dark);}
   .btn-secondary{background:var(--surface);border:1px solid var(--border);color:var(--text);}
+  .btn-danger{background:var(--surface);border:1px solid var(--danger);color:var(--danger);}
+  .btn-danger:active{background:#FDEEEE;}
+  .map-link{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;
+    color:var(--accent);margin:10px 0 0;text-decoration:none;}
 
   /* Action list */
   .filters{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;}
@@ -132,6 +136,7 @@
   <div class="badge-row">
     <div class="pill"><span class="dot" id="netDot"></span><span id="netLabel">Checking…</span></div>
     <div class="pill"><span id="queueLabel">0 queued</span></div>
+    <div class="pill" id="versionPill"></div>
   </div>
 </header>
 
@@ -237,6 +242,9 @@ const PHOTO_BUCKET = 'action-photos';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+const APP_VERSION = 'v1.1 · 2026-07-08';
+document.getElementById('versionPill').textContent = APP_VERSION;
+
 // Known SLOCs (from field survey data). Edit/add as needed.
 const SLOCS = [
   {code:'1111', desc:'LSB-E'},
@@ -281,6 +289,20 @@ function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'), 2200);
+}
+function getCurrentPosition(){
+  return new Promise(resolve=>{
+    if (!navigator.geolocation){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        location_accuracy_m: pos.coords.accuracy,
+      }),
+      () => resolve(null),               // permission denied / unavailable — save without location
+      { enableHighAccuracy:true, timeout:8000, maximumAge:15000 }
+    );
+  });
 }
 
 /* ---------- populate SLOC dropdowns ---------- */
@@ -330,7 +352,7 @@ document.getElementById('f-photo').addEventListener('change', e=>{
 });
 
 /* ---------- save entry ---------- */
-document.getElementById('saveBtn').addEventListener('click', ()=>{
+document.getElementById('saveBtn').addEventListener('click', async ()=>{
   const slocSel = document.getElementById('f-sloc');
   const slocCode = slocSel.value;
   const slocDesc = slocSel.options[slocSel.selectedIndex]?.text.split(' — ')[1] || '';
@@ -341,6 +363,13 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
     showToast('Add a description first');
     return;
   }
+
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Getting location…';
+  const loc = await getCurrentPosition();
+  saveBtn.disabled = false;
+  saveBtn.textContent = 'Save action item';
 
   const item = {
     id: uid(),
@@ -353,6 +382,9 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
     photo_local: currentPhoto ? currentPhoto.dataUrl : null,
     photo_path: null,      // set once uploaded to Supabase storage
     photo_url: null,       // public URL once uploaded
+    lat: loc?.lat ?? null,
+    lng: loc?.lng ?? null,
+    location_accuracy_m: loc?.location_accuracy_m ?? null,
     sync: 'queued',
     created_at: new Date().toISOString(),
   };
@@ -370,7 +402,7 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
   document.querySelector('.priority-btn[data-p="Medium"]').classList.add('sel');
   currentPriority = 'Medium';
 
-  showToast('Saved — will sync automatically');
+  showToast(loc ? 'Saved with location — will sync automatically' : 'Saved (no location) — will sync automatically');
   updateQueueBadge();
   trySync();
 });
@@ -409,6 +441,9 @@ async function trySync(){
         priority: it.priority,
         status: it.status,
         photo_path: photoPath,
+        lat: it.lat ?? null,
+        lng: it.lng ?? null,
+        location_accuracy_m: it.location_accuracy_m ?? null,
       };
 
       if (it.sync === 'queued'){
@@ -503,6 +538,7 @@ function renderList(){
             <span>·</span>
             <span>${it.status}</span>
             <span class="sync-tag"><span class="dot ${syncDot}"></span>${syncText}</span>
+            ${it.lat!=null ? '<span class="sync-tag">· <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>' : ''}
           </div>
         </div>
       </div>`;
@@ -525,11 +561,19 @@ function openDetail(id){
   const it = items.find(i=>i.id===id);
   if (!it) return;
   const img = it.photo_local || it.photo_url;
+  const mapLink = it.lat!=null
+    ? `<a class="map-link" href="https://www.google.com/maps?q=${it.lat},${it.lng}" target="_blank" rel="noopener">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+         View on map
+       </a>`
+    : `<div style="font-size:13px;color:var(--text-2);margin-top:10px;">No location captured for this entry.</div>`;
+
   document.getElementById('modalContent').innerHTML = `
     <div class="close-row"><button id="closeModal">Close</button></div>
     ${img ? `<img src="${img}">` : ''}
     <h3>${it.sloc_code} — ${it.sloc_desc}</h3>
     <p style="color:var(--text-2);font-size:14px;">${escapeHtml(it.description)}</p>
+    ${mapLink}
     <label>Size estimate</label>
     <input type="text" id="editSize" value="${it.size_estimate||''}">
     <label>Status</label>
@@ -545,6 +589,7 @@ function openDetail(id){
       <option ${it.priority==='High'?'selected':''}>High</option>
     </select>
     <button class="btn btn-primary" id="saveEdit">Save changes</button>
+    <button class="btn btn-danger" id="deleteEntry">Delete entry</button>
   `;
   document.getElementById('modalBg').classList.add('show');
   document.getElementById('closeModal').onclick = closeModal;
@@ -559,6 +604,34 @@ function openDetail(id){
     updateQueueBadge();
     trySync();
   };
+  document.getElementById('deleteEntry').onclick = ()=> deleteItem(it.id);
+}
+
+async function deleteItem(id){
+  const it = items.find(i=>i.id===id);
+  if (!it) return;
+  if (!confirm(`Delete this action item for ${it.sloc_code}? This can't be undone.`)) return;
+
+  if (it.db_id){
+    try {
+      const { error } = await supabase.from('action_items').delete().eq('id', it.db_id);
+      if (error) throw error;
+      if (it.photo_path){
+        await supabase.storage.from(PHOTO_BUCKET).remove([it.photo_path]);
+      }
+    } catch (err){
+      showToast('Could not delete from server — try again online');
+      console.warn('delete failed', err.message);
+      return; // don't remove locally if the remote delete failed, to avoid drift
+    }
+  }
+
+  items = items.filter(i=>i.id!==id);
+  saveLocal();
+  closeModal();
+  renderList();
+  updateQueueBadge();
+  showToast('Deleted');
 }
 function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
 document.getElementById('modalBg').addEventListener('click', e=>{
@@ -617,6 +690,9 @@ async function exportToExcel(list){
     { header:'Status', key:'status', width:12 },
     { header:'Thumbnail', key:'thumb', width:10 },
     { header:'Full Photo', key:'full', width:16 },
+    { header:'Latitude', key:'lat', width:12 },
+    { header:'Longitude', key:'lng', width:12 },
+    { header:'Map Link', key:'map', width:16 },
     { header:'Created', key:'created', width:18 },
   ];
   ws.getRow(1).font = { bold:true };
@@ -633,6 +709,9 @@ async function exportToExcel(list){
       status: it.status,
       thumb: '',
       full: '',
+      lat: it.lat ?? '',
+      lng: it.lng ?? '',
+      map: '',
       created: new Date(it.created_at).toLocaleString(),
     });
     ws.getRow(rowIdx).height = 46;
@@ -655,6 +734,12 @@ async function exportToExcel(list){
         linkCell.value = '(pending sync)';
         linkCell.font = { italic:true, color:{argb:'FF6B7280'} };
       }
+    }
+
+    if (it.lat!=null){
+      const mapCell = ws.getCell(`K${rowIdx}`);
+      mapCell.value = { text:'View on map', hyperlink: `https://www.google.com/maps?q=${it.lat},${it.lng}` };
+      mapCell.font = { color:{argb:'FFE8611C'}, underline:true };
     }
   }
 
@@ -694,6 +779,9 @@ async function pullRemote(){
         photo_local: null,
         photo_path: row.photo_path,
         photo_url: photoUrl,
+        lat: row.lat,
+        lng: row.lng,
+        location_accuracy_m: row.location_accuracy_m,
         sync: 'synced',
         created_at: row.created_at,
       });
