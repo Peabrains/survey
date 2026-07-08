@@ -303,12 +303,50 @@ let currentPhoto = null;          // {dataUrl, blob}
 let syncing = false;
 let currentUser = localStorage.getItem(USER_KEY) || '';
 
+// one-time cleanup for storage bloated by earlier testing: synced items
+// already have their photo in Supabase (photo_url), so drop stale local copies
+(function cleanupSyncedLocalPhotos(){
+  let freed = false;
+  for (const it of items){
+    if (it.sync === 'synced' && it.photo_local){
+      it.photo_local = null;
+      freed = true;
+    }
+  }
+  if (freed) saveLocal();
+})();
+
 /* ---------- helpers ---------- */
 function loadLocal(){
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; }
   catch { return []; }
 }
-function saveLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(items)); }
+function saveLocal(){
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(items));
+  } catch (err){
+    // Most likely a QuotaExceededError from accumulated base64 photo data.
+    // Synced items already have their photo in Supabase storage (photo_url),
+    // so the local base64 copy (photo_local) is safe to drop to reclaim space.
+    console.warn('saveLocal failed, freeing local photo copies and retrying', err);
+    let freed = false;
+    for (const it of items){
+      if (it.sync === 'synced' && it.photo_local){
+        it.photo_local = null;
+        freed = true;
+      }
+    }
+    if (freed){
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(items));
+        return;
+      } catch (err2){
+        console.warn('saveLocal still failing after cleanup', err2);
+      }
+    }
+    showToast('Local storage is full — some data may not persist offline');
+  }
+}
 function uid(){ return 'it_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -528,11 +566,13 @@ async function trySync(){
         it.db_id = data.id;        // real Supabase uuid, separate from local id
         it.photo_path = photoPath;
         it.photo_url = photoUrl;
+        if (photoUrl) it.photo_local = null; // photo now lives in Supabase storage — drop the local base64 copy
         it.sync = 'synced';
         changed = true;
       } else if (it.sync === 'dirty' && it.db_id){
         const { error } = await supabase.from('action_items').update(row).eq('id', it.db_id);
         if (error) throw error;
+        if (photoUrl) it.photo_local = null;
         it.sync = 'synced';
         changed = true;
       }
